@@ -9,9 +9,15 @@
 ; Autores: Alex Fabiano Garcia e Thales Marcel
 ; Data: 28/02/2019
 ; 
-; Freq: 1 MHz
-; Ciclo de máquina: 1/(Freq. Cristal / 4) = 
+; Freq.: 1 MHz (simulador)
 ;
+; A implementação utiliza interrupção através do Timer 1 do PIC16F873A. A
+; interrupção ocorre com o overflow de TMR1H, sendo esta tratada somente quando
+; o registrador 'timerCount', decrementado a cada interrupção, chega a zero.
+; Esta estratégia foi utilizada para ler a porta A de tempo em tempo sem
+; utilizar o pino da porta B como entrada, pois este é utilizado como saída.
+; Neste intervalo de interrupção, um estímulo pode ser causado para alterar
+; os valores contidos na porta A que representam o BCD.
 
     list   P=PIC16F873A	    ; Microcontrolador utilizado: PIC16F873A
 
@@ -34,7 +40,6 @@ bank1	    macro ; Selecionar o banco 1 da memória
 	    endm
 
 ; Registradores de uso geral
-	    ;bcd_count	    equ	    H'20'
 	    cblock	    H'20'
 	    bcdCounter		; H'20' Registrador para contar BCDs informados
 	    digitoUnidade	; H'21' Registrador para dígito de unidade
@@ -58,16 +63,15 @@ bank1	    macro ; Selecionar o banco 1 da memória
 	    
 	    call	    salvarContexto  ; Salva contexto para tratar ISR
 	    
-	    btfss	    INTCON,TMR0IF   ;Ocorreu overflow no Timer0?
+	    btfss	    PIR1,TMR1IF	    ;Ocorreu overflow no Timer1?
 	    goto	    exitISR	    ;Não, saia da interrupção
 	    
-	    bcf		    INTCON,TMR0IF   ; Limpa flag de interrupção TRM0
+	    bcf		    PIR1,TMR1IF	    ; Limpa flag de interrupção TRM0
 	    decfsz	    timerCount, F   ; Decrementa timerCount. É zero?
 	    goto	    exitISR	    ; Não, saisa da interrupção
 	    
 	    ; Trata ISR (Interrupt Service Routine)
-	    nop
-	    
+	    call	    clearTimerCount
 exitISR:
 	    call	    recuperarContexto	; Retorna contexto antes de ISR
 	    retfie			; Retorna da interrupção
@@ -80,20 +84,24 @@ inicio:
 	    movwf	    TRISA	    ; Porta A servirá como input	    
 	    movlw	    H'00'	    ; W = B'00000000', pois 0 = output
 	    movwf	    TRISB	    ; Porta B servirá como outinput
-	    ; Definir OPTION_REG para interrupção via Timer0
-	    movlw	    B'11000111'	    ; Options: internal clock, timer0
-	    movwf	    OPTION_REG	    ; prescaler 1:256 (111 menos sig.)
-	    bsf		    INTCON,GIE	    ; Habilita interrupção do Timer0
-	    bsf		    INTCON,TMR0IE   ; Habilita interrupção do Timer0
+	    bsf		    PIE1,TMR1IE	    ; Habilita interrupção via
+					    ;	overflow de TMR1IE (Timer1)
 	    bank0
+	    bsf		    INTCON,GIE	    ; Habilita interrupção geral
+	    bsf		    INTCON,PEIE	    ; Habilita inter. de periféricos
+	    movlw	    B'00110001'	    ; T1CON para interrupção via Timer1
+	    movwf	    T1CON	    ; com internal clock e prescaler 1:8
 	    
-	    movlw	    D'250'
-	    movwf	    timerCount
-	    clrf	    TMR0
+	    call	    clearTimerCount
 
 loop:
 	    goto	    loop
 	    ;goto	    $	    ; Loop infinito (vai para posição atual $)
+
+clearTimerCount:
+	    movlw	    D'128'
+	    movwf	    timerCount
+	    return
 
 salvarContexto:
 	    ; Salvar contexto (copiado do DataSheet do PIC)
