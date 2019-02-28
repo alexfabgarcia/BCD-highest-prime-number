@@ -4,7 +4,7 @@
   <defaultConf>0</defaultConf>
   <confs>
     <conf name="default" type="2">
-      <platformToolSN>platform-tool-sn</platformToolSN>
+      <platformToolSN></platformToolSN>
       <languageToolchainDir>/opt/microchip/mplabx/v5.15/mpasmx</languageToolchainDir>
       <mdbdebugger version="1">
         <placeholder1>place holder 1</placeholder1>
