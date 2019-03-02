@@ -41,11 +41,9 @@ bank1	    macro
 	    bcf		    STATUS, RP1
 	    endm
 
-; Skip the next instruction if W was less than or equal to the value
-; it was subtracted from.  This assumes that the carry flag has been
-; preserved from the last SUBWF or SUBLW instruction.
+; Pula próxima instrução se W é menor ou igual ao valor do qual foi subtraído.
 skip_wle    macro
-	    btfss	    STATUS, C;skip if no borrow occurred
+	    btfss	    STATUS, C ; Skip if no borrow occurred
 	    endm
 
 ; Registradores de uso geral
@@ -54,8 +52,9 @@ skip_wle    macro
 	    bcdAccumulator	; Registrador para acumular BCDs
 	    timerCount		; Registrador auxiliar para tratar temporização
 				; juntamente com interrupção do Timer0
-	    readAux		; Auxilia na leitura de BCDs e primos (look-up)
+	    bcdAux		; Auxilia na leitura de BCDs e primos (look-up)
 	    iteracao		; Controle de iteração
+	    primo		; Número primo encontrado
 
 	    ; Registradores para troca de contexto com interrupção
 	    W_TEMP
@@ -79,27 +78,29 @@ skip_wle    macro
 	    goto	    exitISR	    ; Não, sai da interrupção
 
 	    ; Trata ISR (Interrupt Service Routine)
-	    ;movfw	    PORTA	    ; Lê o conteúdo da porta A
-	    movlw	    B'00110001'	    ; Temporário, o correto é a linha acima
-	    andlw	    H'0F'	    ; Só interessam os últimos 4 dígitos
-	    movwf	    readAux	    ; Armazena o conteúdo em readAux
+tratarISR:
+	    movfw	    PORTA	    ; Lê o conteúdo da porta A
+	    movwf	    bcdAux	    ; Armazena o conteúdo em bcdAux
 	    sublw	    B'00001001'	    ; Subtrai 9 do valor lido
 	    skip_wle			    ; Verifica se W é menor ou igual a 9
 	    goto	    beforeExitISR   ; BCD inválido. Sai da interrupção
-	    goto	    tratarBCD	    ; Realiza o tratamento do BCD
+	    goto	    leituraBCD	    ; Realiza o tratamento do BCD
 
 beforeExitISR:
-	    call	    clearTimerCount
+	    call	    clearTimerCount ; Reinicia contador de tempo
 
 exitISR:
 	    call	    recuperarContexto	; Retorna contexto antes de ISR
-	    retfie			; Retorna da interrupção
+	    retfie				; Retorna da interrupção
 
 ; Programa principal
 inicio:
+	    clrf	    PORTA
 	    bank1
 	    ; Definir entrada e saída via TRISA e TRISB
-	    movlw	    H'FF'	    ; W = B'11111111', pois 1 = input
+	    movlw	    H'06'
+	    movwf	    ADCON1
+	    movlw	    H'CF'	    ; W = B'11111111', pois 1 = input
 	    movwf	    TRISA	    ; Porta A servirá como input	    
 	    movlw	    H'00'	    ; W = B'00000000', pois 0 = output
 	    movwf	    TRISB	    ; Porta B servirá como outinput
@@ -117,14 +118,16 @@ inicio:
 loop:
 	    goto	    $	    ; Loop infinito (vai para posição atual $)
 
+; Subrotinas
+
 clearBCDCount:
 	    movlw	    D'2'	    ; Define W = 2 pois serão lidos 3
 	    movwf	    bcdCounter	    ; números BCD: unidade, dez. e cent.
 	    return
 
 clearTimerCount:
-	    movlw	    D'10'
-	    movwf	    timerCount
+	    movlw	    D'10'	    ; W = 10. Pode ser alterado
+	    movwf	    timerCount	    ; para controle de tempo de leitura
 	    return
 
 salvarContexto:
@@ -151,75 +154,120 @@ recuperarContexto:
 	    SWAPF    W_TEMP,W         ;Swap W_TEMP into W
 	    return
 
-
-tratarBCD:
-	    movfw	    bcdCounter	    ; Armazena contador de BCD
-	    sublw	    D'2'	    ; Substrai 2 de W
-	    btfsc	    STATUS,Z	    ; Resultado igual a zero?
-	    goto	    unidadeBCD	    ; Tratar unidade
-	    movfw	    bcdCounter
-	    sublw	    D'1'	    ; Substrai 1 de W
-	    btfsc	    STATUS,Z	    ; Resultado igual a zero?
-	    goto	    dezenaBCD	    ; Tratar dezena
-	    goto	    centenaBCD	    ; Tratar centena
-
-unidadeBCD:
-	    movfw	    readAux	    ; Retorna BCD para W
-	    movwf	    bcdAccumulator  ; Inicia BCD com unidade informada
-	    goto	    sairTratamentoBCD	; unidade BCD tratada, saindo...
-
-dezenaBCD:
-	    movfw	    readAux
-	    btfsc	    STATUS,Z		; Resultado igual a zero?
-	    goto	    sairTratamentoBCD	; dezena BCD tratada, saindo...
-	    movfw	    bcdAccumulator
-	    addlw	    D'10'
-	    movwf	    bcdAccumulator
-	    decf	    readAux,F
-	    goto	    dezenaBCD
-
-centenaBCD:
-	    movfw	    readAux
-	    btfsc	    STATUS,Z		; Resultado igual a zero?
-	    goto	    sairCentenaBCD	; dezena BCD tratada, saindo...
-	    movfw	    bcdAccumulator
-	    addlw	    D'100'
-	    btfsc	    STATUS,C
-	    goto	    overflowBCD		; Overflow centena. BCD > 255
-	    movwf	    bcdAccumulator
-	    decf	    readAux,F
-	    goto	    centenaBCD
-
-sairCentenaBCD:
-	    movfw	    bcdAccumulator
-	    call	    buscarPrimo
-	    movfw	    readAux
-	    movwf	    PORTB
-	    call	    clearBCDCount
-	    goto	    beforeExitISR
-
-overflowBCD:
-	    call	    clearBCDCount
+reiniciarBCD:
+	    call	    clearBCDCount   ; Reinicia contador de leitura BCD
 	    goto	    beforeExitISR   ; Prosseguir execução
 
 sairTratamentoBCD:
 	    decf	    bcdCounter,F    ; Decrementa o contador BCD
 	    goto	    beforeExitISR   ; Prosseguir execução
 
+leituraBCD:
+	    movfw	    bcdCounter		; Armazena contador de BCD
+	    sublw	    D'2'		; Substrai 2 de W
+	    btfsc	    STATUS,Z		; Resultado igual a zero?
+	    goto	    leituraUnidadeBCD	; Tratar unidade
+	    movfw	    bcdCounter		; Armazena contador de BCD
+	    sublw	    D'1'		; Substrai 1 de W
+	    btfsc	    STATUS,Z		; Resultado igual a zero?
+	    goto	    leituraDezenaBCD	; Tratar dezena
+	    goto	    leituraCentenaBCD	; Tratar centena
+
+leituraUnidadeBCD:
+	    movfw	    bcdAux		; Move dígito BCD para W
+	    movwf	    bcdAccumulator	; Inicia BCD com unidade informada
+	    goto	    sairTratamentoBCD	; unidade BCD tratada, saindo...
+
+leituraDezenaBCD:
+	    movfw	    bcdAux		; Move dígito BCD para W
+	    btfsc	    STATUS,Z		; Resultado igual a zero?
+	    goto	    sairTratamentoBCD	; dezena BCD tratada, saindo...
+	    movfw	    bcdAccumulator	; Move acumulador para W
+	    addlw	    D'10'		; Soma 10 em W
+	    movwf	    bcdAccumulator	; Move W para acumulador
+	    decf	    bcdAux,F		; Dec. número lido (iteração)
+	    goto	    leituraDezenaBCD	; Continua leitura de dezena
+
+leituraCentenaBCD:
+	    movfw	    bcdAux		; Move BCD para W
+	    btfsc	    STATUS,Z		; Resultado igual a zero?
+	    goto	    posLeituraBCD	; centena BCD tratada, saindo...
+	    movfw	    bcdAccumulator	; Move acumulador para W
+	    addlw	    D'100'		; Soma 100 a W
+	    btfsc	    STATUS,C		; Ocorreu overflow? BCD > 255
+	    goto	    reiniciarBCD	; Sim, reinicia a leitura
+	    movwf	    bcdAccumulator	; Move W para acumulador
+	    decf	    bcdAux,F		; Dec. número lido (iteração)
+	    goto	    leituraCentenaBCD	; Continua leitura de centena
+
+posLeituraBCD:
+	    ; Verifica se o número lido é 0 ou 1, invalidando prosseguimento
+	    movfw	    bcdAccumulator  ; Coloca o número lido em W
+	    sublw	    D'1'	    ; Subtrai W de 1
+	    btfsc	    STATUS,C	    ; O valor lido é 0 ou 1?
+	    goto	    reiniciarBCD    ; Sim, sem número primo. Reinicia
+
+	    ; Busca primo
+	    call	    buscarPrimo	    ; Busca primo <= bcdAccumulator
+	    movfw	    primo
+	    movwf	    bcdAux
+	    
+	    ; Acumula dígito de centena em bcdAccumulator e envia para PORTB
+	    movlw	    H'00'
+	    movwf	    bcdAccumulator
+	    call	    encontraCentenaBCD
+	    movfw	    bcdAccumulator
+	    movwf	    PORTB
+	    
+	    ; Acumula dígito de dezena em bcdAccumulator e envia para PORTB
+	    movlw	    H'00'
+	    movwf	    bcdAccumulator
+	    call	    encontraDezenaBCD
+	    movfw	    bcdAccumulator
+	    movwf	    PORTB
+
+	    ; Escreve na porta B a(s) unidade(s) restante(s) em bcdAux
+	    movfw	    bcdAux		; Copia unidade(s) para W
+	    movwf	    PORTB		; Move unidade(s) para porta B
+	    
+	    call	    clearBCDCount
+	    goto	    beforeExitISR
+
+; Armanazena em bcdAccumulator o dígito de centena BCD
+encontraCentenaBCD:
+	    movlw	    D'100'		; Define literal 100 em W
+	    subwf	    bcdAux,W		; W = bcdAux - 100
+	    btfss	    STATUS,C		; bcdAux é menor que 100?
+	    return				; Sim, para acúmulo
+	    movwf	    bcdAux		; bcdAux = bcdAux - 100
+	    incf	    bcdAccumulator,F	; Incrementa acumulador
+	    goto	    encontraCentenaBCD	; Continua busca
+
+; Armanazena em bcdAccumulator o dígito de dezena BCD
+encontraDezenaBCD:
+	    movlw	    D'10'		; Define literal 100 em W
+	    subwf	    bcdAux,W		; W = bcdAux - 10
+	    btfss	    STATUS,C		; bcdAux é menor que 10?
+	    return				; Sim, para acúmulo
+	    movwf	    bcdAux		; bcdAux = bcdAux - 10
+	    incf	    bcdAccumulator,F	; Incrementa acumulador
+	    goto	    encontraDezenaBCD	; Continua busca
+
+; Busca número primo na tabela de look-up e armazena no registrador 'primo'
 buscarPrimo:
 	    ; Procurando número primo
-	    movlw	    D'53'
+	    movlw	    D'53'	    ; 54: qnt. de números primos até 255
 loopBuscaPrimo:
-	    movwf	    iteracao
-	    call	    lookupPrimos
-	    movwf	    readAux
-	    movfw	    bcdAccumulator
-	    subwf	    readAux,W
-	    skip_wle
-	    return
-	    decf	    iteracao,W
-	    goto	    loopBuscaPrimo
+	    movwf	    iteracao	    ; Controla iteração
+	    call	    lookupPrimos    ; Busca primo na posição 'iteracao'
+	    movwf	    primo	    ; Armazena W em primo
+	    subwf	    bcdAccumulator,W; Subtrai o W do número primo
+	    btfsc	    STATUS,C	    ; W é menor ou igual ao n. primo?
+	    return			    ; Sim, encontrado. Retorna.
+	    decf	    iteracao,W	    ; Decrementa iteração.
+	    goto	    loopBuscaPrimo  ; Continua busca
 
+; Tabela look-up números primos
 lookupPrimos:
 	    addwf	PCL,F
 	    retlw       D'2'
