@@ -54,7 +54,7 @@ skip_wle    macro
 	    bcdAccumulator	; Registrador para acumular BCDs
 	    timerCount		; Registrador auxiliar para tratar temporização
 				; juntamente com interrupção do Timer0
-	    bcdAux		; Auxilia na busca por BCDs na tabela look-up
+	    readAux		; Auxilia na leitura de BCDs e primos (look-up)
 	    iteracao		; Controle de iteração
 
 	    ; Registradores para troca de contexto com interrupção
@@ -80,9 +80,9 @@ skip_wle    macro
 
 	    ; Trata ISR (Interrupt Service Routine)
 	    ;movfw	    PORTA	    ; Lê o conteúdo da porta A
-	    movlw	    B'00110010'	    ; Temporário, o correto é a linha acima
+	    movlw	    B'00110001'	    ; Temporário, o correto é a linha acima
 	    andlw	    H'0F'	    ; Só interessam os últimos 4 dígitos
-	    movwf	    bcdAux	    ; Armazena o conteúdo lido em bcdAux
+	    movwf	    readAux	    ; Armazena o conteúdo em readAux
 	    sublw	    B'00001001'	    ; Subtrai 9 do valor lido
 	    skip_wle			    ; Verifica se W é menor ou igual a 9
 	    goto	    beforeExitISR   ; BCD inválido. Sai da interrupção
@@ -164,22 +164,22 @@ tratarBCD:
 	    goto	    centenaBCD	    ; Tratar centena
 
 unidadeBCD:
-	    movfw	    bcdAux	    ; Retorna BCD para W
+	    movfw	    readAux	    ; Retorna BCD para W
 	    movwf	    bcdAccumulator  ; Inicia BCD com unidade informada
 	    goto	    sairTratamentoBCD	; unidade BCD tratada, saindo...
 
 dezenaBCD:
-	    movfw	    bcdAux
+	    movfw	    readAux
 	    btfsc	    STATUS,Z		; Resultado igual a zero?
 	    goto	    sairTratamentoBCD	; dezena BCD tratada, saindo...
 	    movfw	    bcdAccumulator
 	    addlw	    D'10'
 	    movwf	    bcdAccumulator
-	    decf	    bcdAux,F
+	    decf	    readAux,F
 	    goto	    dezenaBCD
 
 centenaBCD:
-	    movfw	    bcdAux
+	    movfw	    readAux
 	    btfsc	    STATUS,Z		; Resultado igual a zero?
 	    goto	    sairCentenaBCD	; dezena BCD tratada, saindo...
 	    movfw	    bcdAccumulator
@@ -187,10 +187,14 @@ centenaBCD:
 	    btfsc	    STATUS,C
 	    goto	    overflowBCD		; Overflow centena. BCD > 255
 	    movwf	    bcdAccumulator
-	    decf	    bcdAux,F
+	    decf	    readAux,F
 	    goto	    centenaBCD
 
 sairCentenaBCD:
+	    movfw	    bcdAccumulator
+	    call	    buscarPrimo
+	    movfw	    readAux
+	    movwf	    PORTB
 	    call	    clearBCDCount
 	    goto	    beforeExitISR
 
@@ -204,20 +208,17 @@ sairTratamentoBCD:
 
 buscarPrimo:
 	    ; Procurando número primo
+	    movlw	    D'53'
+loopBuscaPrimo:
+	    movwf	    iteracao
 	    call	    lookupPrimos
-	    subwf	    bcdAux,w
-	    btfsc	    STATUS,Z
-	    goto	    mostrarPrimo    ; Valor é igual
-	    btfsc	    STATUS,C
-	    nop				    ; bcdAux é maior que W
-	    ; ...
-	    INCFSZ	    W
-	    goto	    beforeExitISR
-	    goto	    buscarPrimo	    ; W é maior
-
-mostrarPrimo:
-	    movfw	    bcdAux
-	    movwf	    PORTB
+	    movwf	    readAux
+	    movfw	    bcdAccumulator
+	    subwf	    readAux,W
+	    skip_wle
+	    return
+	    decf	    iteracao,W
+	    goto	    loopBuscaPrimo
 
 lookupPrimos:
 	    addwf	PCL,F
